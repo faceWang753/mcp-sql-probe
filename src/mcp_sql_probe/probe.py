@@ -293,12 +293,19 @@ class Probe:
             self.add(id, title, INCONCLUSIVE, f"the result held neither the first nor the last row: {out.excerpt}")
 
     def _slow_statements(self) -> list[str]:
+        # Each statement returns the marker "mcpprobedone" only if it really ran to the end.
+        # Without it, a server that refuses the statement and reports the refusal as a
+        # normal result would look like a query that finished at once.
         secs = int(self.slow_seconds)
-        burn = "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 300000000) SELECT count(*) FROM t"
+        done = self.concat("'mcpprobe'", "'done'")
+        burn = (
+            "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 300000000) "
+            f"SELECT {done} AS m FROM (SELECT count(*) AS c FROM t) s"
+        )
         if self.dialect == "postgres":
-            return [f"SELECT pg_sleep({secs})", burn]
+            return [f"SELECT {done} AS m FROM (SELECT pg_sleep({secs})) s", burn]
         if self.dialect == "mysql":
-            return [f"SELECT SLEEP({secs})"]
+            return [f"SELECT {done} AS m FROM (SELECT SLEEP({secs}) AS z) s"]
         return [burn]
 
     async def check_timeout(self) -> None:
@@ -307,8 +314,12 @@ class Probe:
         last = None
         for sql in self._slow_statements():
             out = last = await self.call(sql, timeout=limit + 15)
-            if out.kind in ("tool_error", "protocol_error") and out.seconds < quick:
+            finished = out.kind == "ok" and "mcpprobedone" in out.text
+            if out.kind != "timeout" and not finished and out.seconds < quick:
                 continue  # refused outright (for example by a function allowlist); try the next statement
+            if out.kind == "ok" and not finished:
+                self.add(id, title, PASS, f"stopped after {out.seconds} s, but the server did not flag it as an error: {out.excerpt}")
+                return
             if out.kind == "timeout":
                 self.add(id, title, FAIL, f"still running when the probe gave up after {out.seconds:.0f} s. It may still be running in the database.")
             elif out.kind == "ok" and out.seconds >= limit - 1:
