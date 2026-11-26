@@ -1,0 +1,48 @@
+name: mcp-sql-probe
+description: Check how an MCP server with a SQL query tool reports errors, enforces read-only mode and limits results.
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  url:
+    description: HTTP or SSE address of a server that is already running in the job.
+    required: false
+  stdio:
+    description: Command that starts the server over stdio. Use this or url.
+    required: false
+  suite:
+    description: "Comma-separated list from: errors, readonly, limits."
+    default: errors
+  dialect:
+    description: "One of: postgres, mysql, sqlite, duckdb."
+    default: postgres
+  tool:
+    description: Name of the SQL tool, if it is not found automatically.
+    required: false
+  param:
+    description: Name of the tool parameter that takes the SQL.
+    required: false
+  own-database:
+    description: Set to "true" to allow the readonly and limits suites. They try to create tables and run heavy queries.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.13"
+    - shell: bash
+      run: pip install "$GITHUB_ACTION_PATH"
+    - shell: bash
+      # Inputs reach the tool as environment variables, never as shell text.
+      env:
+        MCP_PROBE_URL: ${{ inputs.url }}
+        MCP_PROBE_STDIO: ${{ inputs.stdio }}
+        MCP_PROBE_SUITE: ${{ inputs.suite }}
+        MCP_PROBE_DIALECT: ${{ inputs.dialect }}
+        MCP_PROBE_TOOL: ${{ inputs.tool }}
+        MCP_PROBE_PARAM: ${{ inputs.param }}
+        MCP_PROBE_OWN_DATABASE: ${{ inputs.own-database }}
+      run: mcp-sql-probe
