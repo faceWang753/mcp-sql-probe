@@ -91,6 +91,27 @@ A failure reported as a JSON-RPC error instead of a tool result is a `WARN`, not
 When a check cannot decide, it says `INCONCLUSIVE` and why. For example, a server that
 refuses recursive queries cannot be tested for a row cap this way.
 
+## A real run
+
+The [Third-party servers](.github/workflows/third-party.yml) workflow runs the probe
+against [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp) in
+restricted mode, pinned to commit `3701f10` (its `main` on 26 November 2026), with a
+throwaway PostgreSQL 17 and the server connected as the superuser. Result of that run:
+
+| Check | Result |
+|---|---|
+| Syntax error is flagged | **FAIL**: `Error: Failed to parse SQL statement` came back with `isError` false |
+| Missing table is flagged | **FAIL**: `Error: relation ... does not exist` came back with `isError` false |
+| `CREATE TABLE`, stacked, after `COMMIT`, in a `DO` block, after the session setting | PASS, all five: nothing was written. None of the refusals was flagged as an error |
+| 50,000-row result is capped | **FAIL**: all 50,000 rows came back, 2.7 million characters in one tool result |
+| Slow query is stopped | PASS: stopped after 30 s. The timeout message was not flagged as an error either |
+
+So its read-only mode held against every write the probe tried, and the two gaps are the
+ones already reported there as
+[#244](https://github.com/crystaldba/postgres-mcp/issues/244) (fix proposed in
+[#245](https://github.com/crystaldba/postgres-mcp/pull/245)) and
+[#243](https://github.com/crystaldba/postgres-mcp/issues/243). I opened those three.
+
 ## How it decides
 
 The probe does not trust the server's wording. To learn whether a table was created, it
@@ -105,13 +126,14 @@ it names the table so that you can.
 
 - It finds the gaps it looks for. Passing every check does not show that a server is safe.
 - The `readonly` suite only makes sense for a server that claims to be read-only.
-- It has been run against the two example servers in this repository, which is what CI
-  does. I have not yet run this version against third-party servers.
+- It has been run against the two example servers in this repository and against one
+  third-party server (see "A real run"). That is a small sample.
 - `limits.time` may leave the slow query running in the database if the server does not
   cancel it.
 - MySQL's default recursion limit (1,000) makes `limits.rows` inconclusive there unless
   you pass `--rows 1000` or lower.
-- Dialects: PostgreSQL, MySQL, SQLite and DuckDB. Only SQLite is exercised in CI.
+- Dialects: PostgreSQL, MySQL, SQLite and DuckDB. SQLite and PostgreSQL are exercised in
+  CI. The MySQL and DuckDB statements have not been run.
 
 ## Examples
 
