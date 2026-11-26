@@ -1,0 +1,78 @@
+name: Third-party servers
+
+# Runs the probe against real servers, each pinned to a commit, with a throwaway
+# PostgreSQL that exists only for this job. Findings are written to the job summary.
+# A check that fails here is a finding about that server, so it does not fail the job;
+# the job fails only if the probe could not run.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/third-party.yml
+      - src/**
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-mcp:
+    name: crystaldba/postgres-mcp (restricted mode)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: probe
+          POSTGRES_DB: probe
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # main on 26 Nov 2026, after the release-prep merges
+      SERVER_COMMIT: 3701f109bbb33f6191d6b40f4a2e1e90caeb6ea5
+      # The server connects as the superuser on purpose: the database then blocks
+      # nothing, so every refusal seen is the server's own.
+      DATABASE_URI: postgresql://postgres:probe@localhost:5432/probe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e .
+
+      - name: Install the server in its own environment
+        run: |
+          python -m venv "$RUNNER_TEMP/server"
+          "$RUNNER_TEMP/server/bin/pip" install "git+https://github.com/crystaldba/postgres-mcp@$SERVER_COMMIT"
+          "$RUNNER_TEMP/server/bin/pip" list | grep -i -E "postgres-mcp|^mcp |pglast"
+
+      - name: Probe
+        run: |
+          set +e
+          mcp-sql-probe \
+            --stdio "$RUNNER_TEMP/server/bin/postgres-mcp --access-mode=restricted --transport=stdio" \
+            --dialect postgres --suite errors,readonly,limits --slow-seconds 25 \
+            --i-own-this-database --json postgres-mcp.json
+          code=$?
+          echo "probe exit code: $code"
+          if [ "$code" -gt 1 ]; then
+            echo "the probe could not run"
+            exit 1
+          fi
+
+      - name: Tables left behind
+        if: always()
+        run: psql "$DATABASE_URI" -c "\dt"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-mcp-result
+          path: postgres-mcp.json
+          if-no-files-found: ignore
