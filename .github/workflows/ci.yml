@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pip list | grep -i -E "fastmcp|mcp"
+      - run: pytest -v
+
+      # The same checks through the command line and a real stdio subprocess.
+      - name: Careful example passes
+        run: >
+          mcp-sql-probe --stdio "python examples/careful_server.py" --dialect sqlite
+          --suite errors,readonly,limits --rows 2000 --slow-seconds 4 --i-own-this-database
+      - name: Careless example is caught
+        run: |
+          set +e
+          mcp-sql-probe --stdio "python examples/careless_server.py" --dialect sqlite \
+            --suite errors,readonly --i-own-this-database
+          code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "expected exit code 1 (checks failed), got $code"
+            exit 1
+          fi
